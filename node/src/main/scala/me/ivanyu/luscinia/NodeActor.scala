@@ -9,6 +9,8 @@ object NodeActor {
   private case object ElectionTick extends SchedulerMessage
   // Notification of RequestVoteRPCResend timeout
   private case object RequestVoteRPCResend extends SchedulerMessage
+  // Notification of heartbeat timeout
+  private case object HeartbeatTick extends SchedulerMessage
 
 
   // Node's states
@@ -79,8 +81,11 @@ class NodeActor(val thisNode: Node,
 
   val electionTimerName = "ElectionTimer"
   val resendRequestVoteTimerName = "ResendRequestVote"
+  val heartbeatTimerName = "Heartbeat"
 
   private val clusterInterface = context.actorOf(clusterInterfaceProps)
+
+  private val heartbeatTimeout = 50.millis
 
   // Operation log
   val opLog = Vector[LogEntry](LogEntry(0, EmptyOperation))
@@ -123,9 +128,9 @@ class NodeActor(val thisNode: Node,
 
     // Notification to resend RequestVote to peer that haven't answered yet
     case Event(RequestVoteRPCResend, CandidateData(currentTerm, pending, _)) =>
-      pending.foreach { n =>
+      pending.foreach { p =>
         clusterInterface !
-          RequestVote(currentTerm, opLog.length - 1, opLog.last.term, thisNode, n)
+          RequestVote(currentTerm, opLog.length - 1, opLog.last.term, thisNode, p)
       }
       setTimer(resendRequestVoteTimerName, RequestVoteRPCResend, rpcResendTimeout.timeout.millis)
       stay
@@ -142,16 +147,36 @@ class NodeActor(val thisNode: Node,
     case _ -> Candidate =>
       (nextStateData: @unchecked) match {
         case CandidateData(term, pending, _) =>
-          pending.foreach { n =>
+          pending.foreach { p =>
             clusterInterface !
-              RequestVote(term, opLog.length - 1, opLog.last.term, thisNode, n)
+              RequestVote(term, opLog.length - 1, opLog.last.term, thisNode, p)
           }
       }
       setTimer(electionTimerName, ElectionTick, electionTimeout.random)
       setTimer(resendRequestVoteTimerName, RequestVoteRPCResend, rpcResendTimeout.timeout.millis)
+
+    case _ -> Leader =>
+      (nextStateData: @unchecked) match {
+        case LeaderData(term) =>
+          sendHeartbeat(term)
+          setTimer(heartbeatTimerName, HeartbeatTick, heartbeatTimeout)
+      }
   }
 
-  when(Leader) (FSM.NullFunction)
+  when(Leader) {
+    // Notification to heartbeat
+    case Event(HeartbeatTick, LeaderData(currentTerm)) =>
+      sendHeartbeat(currentTerm)
+      setTimer(heartbeatTimerName, HeartbeatTick, heartbeatTimeout)
+      stay
+  }
+
+  private def sendHeartbeat(term: Int): Unit = {
+    peers.foreach { p =>
+      // TODO prevLogIndex etc.
+      clusterInterface ! AppendEntries(term, 0, 0, List.empty, 0, thisNode, p)
+    }
+  }
 
   whenUnhandled {
     case Event(e, s) =>

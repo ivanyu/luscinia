@@ -1,39 +1,11 @@
 package me.ivanyu.luscinia
 
-import akka.testkit.{TestFSMRef, TestProbe}
-import me.ivanyu.luscinia.ClusterInterface.{RequestVoteResponse, RequestVote, AppendEntries}
+import me.ivanyu.luscinia.ClusterInterface.{AppendEntries, RequestVote, RequestVoteResponse}
 import me.ivanyu.luscinia.NodeActor.{Candidate, Follower, Leader}
-import me.ivanyu.luscinia.entities.{ClientEndpoint, ClusterEndpoint, Node}
 
 import scala.concurrent.duration._
 
 class CandidateTest extends TestBase {
-  private val node1 = Node("node1",
-    ClusterEndpoint("localhost", 8091),
-    ClientEndpoint("localhost", 8081))
-  private val node2 = Node("node2",
-    ClusterEndpoint("localhost", 8092),
-    ClientEndpoint("localhost", 8082))
-  private val node3 = Node("node3",
-    ClusterEndpoint("localhost", 8093),
-    ClientEndpoint("localhost", 8083))
-  private val node4 = Node("node4",
-    ClusterEndpoint("localhost", 8094),
-    ClientEndpoint("localhost", 8084))
-  private val node5 = Node("node5",
-    ClusterEndpoint("localhost", 8095),
-    ClientEndpoint("localhost", 8085))
-  private val smallPeerList = List(node2, node3)
-  private val largePeerList = List(node2, node3, node4, node5)
-
-  private def init(peers: List[Node]): (TestFSMRef[NodeActor.FSMState, NodeActor.FSMData, NodeActor], TestProbe) = {
-    val clusterInterfaceProbe = TestProbe()
-    val clusterInterfaceProbeProps = TestTools.probeProps(clusterInterfaceProbe)
-    val node = TestFSMRef(new NodeActor(node1, peers, clusterInterfaceProbeProps,
-      electionTimeout, rpcResendTimeout))
-    (node, clusterInterfaceProbe)
-  }
-
   test("Case 1: must resend RequestVote only to nodes that haven't answered with RequestVoteResponse") {
     val (node, clusterInterfaceProbe) = init(smallPeerList)
 
@@ -92,7 +64,7 @@ class CandidateTest extends TestBase {
   test("Case 4: must adequately process RequestVote response doubles") {
     val (node, clusterInterfaceProbe) = init(largePeerList)
 
-    val initiallySentRPC = clusterInterfaceProbe.expectMsgAllClassOf(
+    clusterInterfaceProbe.expectMsgAllClassOf(
       (electionTimeout.max + timingEpsilon).milliseconds,
       List.fill(largePeerList.size)(classOf[RequestVote]):_*)
 
@@ -113,7 +85,7 @@ class CandidateTest extends TestBase {
       classOf[RequestVote], classOf[RequestVote])
   }
 
-  test("Case 5: Must become the Leader in case gains the majority") {
+  test("Case 5: Must become the Leader in case gains the majority and immediately send AppendEntries RPC to all the peers") {
     val (node, clusterInterfaceProbe) = init(largePeerList)
 
     clusterInterfaceProbe.expectMsgAllClassOf(
@@ -126,5 +98,9 @@ class CandidateTest extends TestBase {
     clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node5, node1))
 
     assert(node.stateName == Leader)
+
+    clusterInterfaceProbe.expectMsgAllClassOf(
+      (electionTimeout.max + timingEpsilon).milliseconds,
+      List.fill(largePeerList.size)(classOf[AppendEntries]):_*)
   }
 }
