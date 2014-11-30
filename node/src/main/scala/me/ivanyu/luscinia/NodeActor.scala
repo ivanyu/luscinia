@@ -10,33 +10,53 @@ object NodeActor {
   // Notification of RequestVoteRPCResend timeout
   private case object RequestVoteRPCResend extends SchedulerMessage
 
+
   // Node's states
+
   sealed trait FSMState
   case object Follower extends FSMState
   case object Candidate extends FSMState
   case object Leader extends FSMState
 
-  // Node's data
+  /**
+   * FSM data.
+   */
   sealed trait FSMData {
     // Latest term the node has seen
     val currentTerm: Int
   }
 
+  /**
+   * FSM data for the Follower state
+   * @param currentTerm latest term the node has seen
+   */
   sealed case class FollowerData(currentTerm: Int = 0) extends FSMData {
     def toCandidateData(candidate: Node, nodes: Traversable[Node]): CandidateData =
       CandidateData(this.currentTerm + 1, nodes.toSet, Set(candidate))
   }
 
+  /**
+   * FSM data for the Candidate state
+   * @param currentTerm latest term the node has seen
+   * @param requestVoteResultPending nodes we're waiting a response on RequestVote RPC from
+   * @param votedForMe nodes voted for the candidate
+   */
   sealed case class CandidateData(
     currentTerm: Int,
-    // Nodes we're waiting a response on RequestVote RPC from
     requestVoteResultPending: Set[Node],
-    // Nodes voted for the candidate
     votedForMe: Set[Node]
   ) extends FSMData
 
+  /**
+   * FSM data for the Leader state
+   * @param currentTerm latest term the node has seen
+   */
+  sealed case class LeaderData(currentTerm: Int = 0) extends FSMData {
 
-  def props(thisNode: Node, otherNodes: Traversable[Node],
+  }
+
+
+  def props(thisNode: Node, otherNodes: Seq[Node],
             clusterInterfaceProps: Props,
             electionTimeout: ElectionTimeout,
             rpcResendTimeout: RPCResendTimeout): Props = {
@@ -47,7 +67,7 @@ object NodeActor {
 }
 
 class NodeActor(val thisNode: Node,
-                val otherNodes: Traversable[Node],
+                val peers: Seq[Node],
                 val clusterInterfaceProps: Props,
                 val electionTimeout: ElectionTimeout,
                 val rpcResendTimeout: RPCResendTimeout)
@@ -70,6 +90,8 @@ class NodeActor(val thisNode: Node,
   // Index of highest log entry applied to state machine
   var lastApplied = 0
 
+  // Election majority
+  val majority = Math.ceil((peers.length + 1) / 2.0).toInt
 
   override def preStart(): Unit = scheduleElection()
 
@@ -81,41 +103,61 @@ class NodeActor(val thisNode: Node,
 
   when(Follower) {
     case Event(ElectionTick, d: FollowerData) =>
-      goto(Candidate) using d.toCandidateData(thisNode, otherNodes)
+      goto(Candidate) using d.toCandidateData(thisNode, peers)
   }
 
   when(Candidate) {
-    case Event(RequestVoteResponse(term, voteGranted, sender), d: CandidateData) =>
-      stay using d.copy(requestVoteResultPending = d.requestVoteResultPending - sender)
+    // RequestVote response from one of the peers
+    case Event(RequestVoteResponse(term, voteGranted, sender, _), d: CandidateData) =>
+      // If it's the last vote to get the majority, become the leader
+      // Pay attention to double-senders
+      if (!d.votedForMe.contains(sender) && voteGranted && d.votedForMe.size + 1 >= majority) {
+        goto(Leader) using LeaderData(d.currentTerm)
+      } else {
+        val newData = d.copy(
+          requestVoteResultPending = d.requestVoteResultPending - sender,
+          votedForMe = if (voteGranted) d.votedForMe + sender else d.votedForMe)
+        setTimer(resendRequestVoteTimerName, RequestVoteRPCResend, rpcResendTimeout.timeout.millis)
+        stay using newData
+      }
 
+    // Notification to resend RequestVote to peer that haven't answered yet
     case Event(RequestVoteRPCResend, CandidateData(currentTerm, pending, _)) =>
       pending.foreach { n =>
         clusterInterface !
           RequestVote(currentTerm, opLog.length - 1, opLog.last.term, thisNode, n)
       }
+      setTimer(resendRequestVoteTimerName, RequestVoteRPCResend, rpcResendTimeout.timeout.millis)
       stay
+
+    // Notification of election timeout during election => haven't got the majority, restart the election
+    case Event(ElectionTick, d: CandidateData) =>
+      goto(Candidate) using CandidateData(d.currentTerm + 1, peers.toSet, Set(thisNode))
+
+    case Event(AppendEntries(leaderTerm, _, _, _, _, _, _), _) =>
+      goto(Follower) using FollowerData(leaderTerm)
+  }
+
+  onTransition {
+    case _ -> Candidate =>
+      (nextStateData: @unchecked) match {
+        case CandidateData(term, pending, _) =>
+          pending.foreach { n =>
+            clusterInterface !
+              RequestVote(term, opLog.length - 1, opLog.last.term, thisNode, n)
+          }
+      }
+      setTimer(electionTimerName, ElectionTick, electionTimeout.random)
+      setTimer(resendRequestVoteTimerName, RequestVoteRPCResend, rpcResendTimeout.timeout.millis)
   }
 
   when(Leader) (FSM.NullFunction)
-
-  onTransition {
-    case Follower -> Candidate =>
-      (nextStateData: @unchecked) match {
-        case CandidateData(currentTerm, pendingNodes, _) =>
-          pendingNodes.foreach { n =>
-            clusterInterface !
-              RequestVote(currentTerm, opLog.length - 1, opLog.last.term, thisNode, n)
-          }
-      }
-      setTimer(resendRequestVoteTimerName, RequestVoteRPCResend, rpcResendTimeout.timeout.millis)
-  }
 
   whenUnhandled {
     case Event(e, s) =>
       log.warning("Received unhandled request {} in state {}/{}", e, stateName, s)
       stay
   }
-
 
   initialize()
 
