@@ -17,3 +17,4 @@ project/plugins/project/
 .worksheet
 /node/.idea
 /node/.idea_modules
+/node/src/test.sc
