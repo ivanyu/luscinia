@@ -18,7 +18,7 @@ class CandidateTest extends TestBase {
     }.head
 
     // node3 has responded, node2 hasn't
-    clusterInterfaceProbe.send(node, ClusterInterface.RequestVoteResponse(10, voteGranted = false, node3, node1))
+    clusterInterfaceProbe.send(node, ClusterInterface.RequestVoteResponse(0, voteGranted = false, node3, node1))
 
     // The candidate should resend RequestVote for node2
     clusterInterfaceProbe.expectMsgPF((rpcResendTimeout.timeout * 2 + timingEpsilon).milliseconds) {
@@ -34,8 +34,8 @@ class CandidateTest extends TestBase {
       List.fill(smallPeerList.size)(classOf[RequestVote]):_*)
     val initialTerm = initiallySentRPC.head.term
 
-    clusterInterfaceProbe.send(node, RequestVoteResponse(10, voteGranted = false, node2, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(10, voteGranted = false, node3, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node2, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node3, node1))
 
     val secondarySentRPC = clusterInterfaceProbe.expectMsgAllClassOf(
       (electionTimeout.max * 2 + timingEpsilon).milliseconds,
@@ -47,7 +47,7 @@ class CandidateTest extends TestBase {
     assert(secondaryTerm == initialTerm + 1)
   }
 
-  test("Case 3: must step back to the Follower state if received ReplicateLog RPC from the leader") {
+  test("Case 3: must step back to the Follower state if receives AppendEntries RPC from the leader") {
     val (node, clusterInterfaceProbe) = init(smallPeerList)
 
     val initiallySentRPC = clusterInterfaceProbe.expectMsgAllClassOf(
@@ -61,7 +61,20 @@ class CandidateTest extends TestBase {
     assert(node.stateName == Follower)
   }
 
-  test("Case 4: must adequately process RequestVote response doubles") {
+  test("Case 4: Must step back to the Follower state if receives RequestVote response with higher/equal term") {
+    val (node, clusterInterfaceProbe) = init(smallPeerList)
+
+    val initiallySentRPC = clusterInterfaceProbe.expectMsgAllClassOf(
+      (electionTimeout.max + timingEpsilon).milliseconds,
+      List.fill(smallPeerList.size)(classOf[RequestVote]):_*)
+    initiallySentRPC.head.term
+
+    clusterInterfaceProbe.send(node, RequestVoteResponse(10, voteGranted = false, node2, node1))
+
+    assert(node.stateName == Follower)
+  }
+
+  test("Case 5: must adequately process RequestVote response doubles") {
     val (node, clusterInterfaceProbe) = init(largePeerList)
 
     clusterInterfaceProbe.expectMsgAllClassOf(
@@ -70,11 +83,11 @@ class CandidateTest extends TestBase {
 
     // One vote for, but multiple times
     clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = true, node2, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(10, voteGranted = false, node3, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node3, node1))
     clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = true, node2, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(10, voteGranted = false, node4, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node4, node1))
     clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = true, node2, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(10, voteGranted = false, node5, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node5, node1))
 
     // Must remain candidate
     assert(node.stateName == Candidate)
@@ -85,7 +98,7 @@ class CandidateTest extends TestBase {
       classOf[RequestVote], classOf[RequestVote])
   }
 
-  test("Case 5: Must become the Leader in case gains the majority and immediately send AppendEntries RPC to all the peers") {
+  test("Case 6: Must become the Leader in case gains the majority and immediately send AppendEntries RPC to all the peers") {
     val (node, clusterInterfaceProbe) = init(largePeerList)
 
     clusterInterfaceProbe.expectMsgAllClassOf(

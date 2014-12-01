@@ -113,12 +113,17 @@ class NodeActor(val thisNode: Node,
 
   when(Candidate) {
     // RequestVote response from one of the peers
-    case Event(RequestVoteResponse(term, voteGranted, sender, _), d: CandidateData) =>
+    case Event(RequestVoteResponse(responseTerm, voteGranted, sender, _), d: CandidateData) =>
+      // If discovers higher/equal term, become a Follower
+      if (responseTerm >= d.currentTerm)
+        goto(Follower) using FollowerData(responseTerm)
+
       // If it's the last vote to get the majority, become the leader
       // Pay attention to double-senders
-      if (!d.votedForMe.contains(sender) && voteGranted && d.votedForMe.size + 1 >= majority) {
+      else if (!d.votedForMe.contains(sender) && voteGranted && d.votedForMe.size + 1 >= majority)
         goto(Leader) using LeaderData(d.currentTerm)
-      } else {
+
+      else {
         val newData = d.copy(
           requestVoteResultPending = d.requestVoteResultPending - sender,
           votedForMe = if (voteGranted) d.votedForMe + sender else d.votedForMe)
