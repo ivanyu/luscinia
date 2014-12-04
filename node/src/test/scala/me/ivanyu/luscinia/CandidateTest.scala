@@ -1,5 +1,6 @@
 package me.ivanyu.luscinia
 
+import akka.actor.Kill
 import me.ivanyu.luscinia.ClusterInterface.{AppendEntries, RequestVote, RequestVoteResponse}
 import me.ivanyu.luscinia.NodeActor.{Candidate, Follower, Leader}
 
@@ -24,6 +25,8 @@ class CandidateTest extends TestBase {
     clusterInterfaceProbe.expectMsgPF((rpcResendTimeout.timeout * 2 + timingEpsilon).milliseconds) {
       case x: RequestVote if x == rpcForNode2 => true
     }
+
+    node ! Kill
   }
 
   test("Case 2: must restart election with new term if hasn't got the majority") {
@@ -45,6 +48,8 @@ class CandidateTest extends TestBase {
     println(secondarySentRPC)
     assert(secondarySentRPC.length == initiallySentRPC.length)
     assert(secondaryTerm == initialTerm + 1)
+
+    node ! Kill
   }
 
   test("Case 3: must step back to the Follower state if receives AppendEntries RPC from the leader") {
@@ -59,6 +64,8 @@ class CandidateTest extends TestBase {
     clusterInterfaceProbe.send(node, AppendEntries(10, 1, 10, List.empty, 0, node2, node1))
 
     assert(node.stateName == Follower)
+
+    node ! Kill
   }
 
   test("Case 4: Must step back to the Follower state if receives RequestVote response with higher/equal term") {
@@ -72,6 +79,8 @@ class CandidateTest extends TestBase {
     clusterInterfaceProbe.send(node, RequestVoteResponse(10, voteGranted = false, node2, node1))
 
     assert(node.stateName == Follower)
+
+    node ! Kill
   }
 
   test("Case 5: must adequately process RequestVote response doubles") {
@@ -96,6 +105,8 @@ class CandidateTest extends TestBase {
     clusterInterfaceProbe.expectMsgAllClassOf(
       (electionTimeout.max * 2 + timingEpsilon).milliseconds,
       classOf[RequestVote], classOf[RequestVote])
+
+    node ! Kill
   }
 
   test("Case 6: Must become the Leader in case gains the majority and immediately send AppendEntries RPC to all the peers") {
@@ -115,6 +126,8 @@ class CandidateTest extends TestBase {
     clusterInterfaceProbe.expectMsgAllClassOf(
       (electionTimeout.max + timingEpsilon).milliseconds,
       List.fill(largePeerList.size)(classOf[AppendEntries]):_*)
+
+    node ! Kill
   }
 
   test("Case 7: Must elect himself in solitude") {
@@ -123,5 +136,7 @@ class CandidateTest extends TestBase {
     clusterInterfaceProbe.expectNoMsg((electionTimeout.max + timingEpsilon).milliseconds)
 
     assert(node.stateName == Leader)
+
+    node ! Kill
   }
 }

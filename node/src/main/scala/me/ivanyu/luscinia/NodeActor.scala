@@ -1,7 +1,9 @@
 package me.ivanyu.luscinia
 
+import java.util.Calendar
+
 import akka.actor._
-import me.ivanyu.luscinia.MonitoringInterface.{MonitoringMessage}
+import me.ivanyu.luscinia.MonitoringInterface.MonitoringMessage
 import me.ivanyu.luscinia.entities._
 
 object NodeActor {
@@ -83,6 +85,8 @@ import scala.concurrent.duration._
   val resendRequestVoteTimerName = "ResendRequestVote"
   val heartbeatTimerName = "Heartbeat"
 
+  private val calendar = Calendar.getInstance()
+
   private val clusterInterface = context.actorOf(clusterInterfaceProps, "cluster-interface")
   private val monitoringInterface = context.actorOf(monitoringInterfaceProps, "monitoring-interface")
 
@@ -95,6 +99,8 @@ import scala.concurrent.duration._
   var commitIndex = 0
   // Index of highest log entry applied to state machine
   var lastApplied = 0
+
+  var lastRPCFromLeader: Option[Long] = None
 
   // Election majority
   val majority = Math.ceil((peers.length + 1) / 2.0).toInt
@@ -111,26 +117,52 @@ import scala.concurrent.duration._
   startWith(Follower, FollowerData(0))
 
   when(Follower) {
+    case Event(_: AppendEntries, d: FollowerData) =>
+      resetElectionTimer()
+      lastRPCFromLeader = Some(calendar.getTimeInMillis)
+      stay()
+
     case Event(ElectionTick, d: FollowerData) =>
-      goto(Candidate) using CandidateData(d.currentTerm + 1, peers.toSet + thisNode, Set.empty)
+      // Prevent false triggering
+      val currentMillis = calendar.getTimeInMillis
+      val falseTriggering = lastRPCFromLeader match {
+        case Some(lastRPC) if lastRPC - currentMillis < electionTimeout.min => true
+        case _ => false
+      }
+      if (!falseTriggering)
+        goto(Candidate) using CandidateData(d.currentTerm + 1, peers.toSet + thisNode, Set.empty)
+      else
+        stay()
   }
 
   when(Candidate) {
     // RequestVote response from one of the peers
-    case Event(RequestVoteResponse(responseTerm, voteGranted, repsSender, _), d: CandidateData) =>
+    case Event(RequestVoteResponse(responseTerm, voteGranted, respSender, _), d: CandidateData) =>
       // If discovers higher/equal term, become a Follower
-      if (responseTerm >= d.currentTerm)
+      if (responseTerm >= d.currentTerm) {
+        log.info("Higher term detected, step back to Follower")
+        sendToMonitoring("Higher term detected, step back to Follower")
         goto(Follower) using FollowerData(responseTerm)
+      }
 
       // If it's the last vote to get the majority, become the leader
       // Pay attention to double-senders
-      else if (!d.votedForMe.contains(repsSender) && voteGranted && d.votedForMe.size + 1 >= majority)
+      else if (!d.votedForMe.contains(respSender) && voteGranted && d.votedForMe.size + 1 >= majority) {
+        log.info(s"Got vote from ${respSender.id}")
+        sendToMonitoring(s"Got vote from ${respSender.id}")
+
+        log.info("Got the majority, becoming the Leader")
+        sendToMonitoring("Got the majority, becoming the Leader")
         goto(Leader) using LeaderData(d.currentTerm)
+      }
 
       else {
+        log.info(s"Got vote from ${respSender.id}")
+        sendToMonitoring(s"Got vote from ${respSender.id}")
+
         val newData = d.copy(
-          requestVoteResultPending = d.requestVoteResultPending - repsSender,
-          votedForMe = if (voteGranted) d.votedForMe + repsSender else d.votedForMe)
+          requestVoteResultPending = d.requestVoteResultPending - respSender,
+          votedForMe = if (voteGranted) d.votedForMe + respSender else d.votedForMe)
         setTimer(resendRequestVoteTimerName, RequestVoteRPCResendTick, rpcResendTimeout.timeout.millis)
         stay using newData
       }
@@ -142,10 +174,12 @@ import scala.concurrent.duration._
           RequestVote(currentTerm, opLog.length - 1, opLog.last.term, thisNode, p)
       }
       setTimer(resendRequestVoteTimerName, RequestVoteRPCResendTick, rpcResendTimeout.timeout.millis)
-      stay
+      stay()
 
     // Notification of election timeout during election => haven't got the majority, restart the election
     case Event(ElectionTick, d: CandidateData) =>
+      log.info("Didn't get the majority, restarting the election")
+      sendToMonitoring("Didn't get the majority, restarting the election")
       goto(Candidate) using CandidateData(d.currentTerm + 1, peers.toSet, Set(thisNode))
 
     case Event(AppendEntries(leaderTerm, _, _, _, _, _, _), _) =>
@@ -154,7 +188,8 @@ import scala.concurrent.duration._
 
   onTransition {
     case _ -> Candidate =>
-      sendToMonitoring("Became Candidate")
+      log.info("Became a Candidate")
+      sendToMonitoring("Became a Candidate")
 
       (nextStateData: @unchecked) match {
         case CandidateData(term, pending, _) =>
@@ -171,7 +206,8 @@ import scala.concurrent.duration._
       setTimer(resendRequestVoteTimerName, RequestVoteRPCResendTick, rpcResendTimeout.timeout.millis)
 
     case _ -> Leader =>
-      sendToMonitoring("Became Leader")
+      log.info("Became the Leader")
+      sendToMonitoring("Became the Leader")
 
       (nextStateData: @unchecked) match {
         case LeaderData(term) =>
@@ -180,7 +216,8 @@ import scala.concurrent.duration._
       }
 
     case _ -> Follower =>
-      sendToMonitoring("Became Follower")
+      log.info("Became a Follower")
+      sendToMonitoring("Became a Follower")
   }
 
   when(Leader) {
@@ -188,7 +225,7 @@ import scala.concurrent.duration._
     case Event(HeartbeatTick, LeaderData(currentTerm)) =>
       sendHeartbeat(currentTerm)
       setTimer(heartbeatTimerName, HeartbeatTick, heartbeatTimeout)
-      stay
+      stay()
   }
 
   private def sendHeartbeat(term: Int): Unit = {
@@ -201,13 +238,18 @@ import scala.concurrent.duration._
   whenUnhandled {
     case Event(e, s) =>
       log.warning("Received unhandled request {} in state {}/{}", e, stateName, s)
-      stay
+      stay()
   }
 
   initialize()
 
   private def sendToMonitoring(msg: String): Unit = {
     monitoringInterface ! MonitoringMessage(msg)
+  }
+
+  private def resetElectionTimer(): Unit = {
+    cancelTimer(electionTimerName)
+    setTimer(electionTimerName, ElectionTick, electionTimeout.random)
   }
 
 /*  import context.dispatcher
