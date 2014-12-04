@@ -19,7 +19,9 @@ libraryDependencies ++= Seq(
   "com.typesafe" % "config" % "1.2.1",
   "io.spray" %% "spray-can"     % "1.3.2",
   "io.spray" %% "spray-routing" % "1.3.2",
-  "io.spray" %% "spray-client"  % "1.3.2"
+  "io.spray" %% "spray-client"  % "1.3.2",
+  "com.wandoulabs.akka" %% "spray-websocket" % "0.1.3",
+  "org.scala-lang" % "scala-reflect" % scalaVersion.value
 )
 
 scalacOptions ++= Seq(

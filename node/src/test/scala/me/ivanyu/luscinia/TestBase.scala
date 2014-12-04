@@ -15,19 +15,24 @@ abstract class TestBase extends TestKit(ActorSystem("Test"))
 
   protected val node1 = Node("node1",
     ClusterEndpoint("localhost", 8091),
-    ClientEndpoint("localhost", 8081))
+    ClientEndpoint("localhost", 8071),
+    MonitoringEndpoint("localhost", 8081))
   protected val node2 = Node("node2",
     ClusterEndpoint("localhost", 8092),
-    ClientEndpoint("localhost", 8082))
+    ClientEndpoint("localhost", 8072),
+    MonitoringEndpoint("localhost", 8082))
   protected val node3 = Node("node3",
     ClusterEndpoint("localhost", 8093),
-    ClientEndpoint("localhost", 8083))
+    ClientEndpoint("localhost", 8073),
+    MonitoringEndpoint("localhost", 8083))
   protected val node4 = Node("node4",
     ClusterEndpoint("localhost", 8094),
-    ClientEndpoint("localhost", 8084))
+    ClientEndpoint("localhost", 8074),
+    MonitoringEndpoint("localhost", 8084))
   protected val node5 = Node("node5",
     ClusterEndpoint("localhost", 8095),
-    ClientEndpoint("localhost", 8085))
+    ClientEndpoint("localhost", 8075),
+    MonitoringEndpoint("localhost", 8085))
   protected val smallPeerList = List(node2, node3)
   protected val largePeerList = List(node2, node3, node4, node5)
 
@@ -38,11 +43,13 @@ abstract class TestBase extends TestKit(ActorSystem("Test"))
 
   override protected def afterAll(): Unit = system.terminate()
 
-  protected def init(peers: List[Node]): (TestFSMRef[NodeActor.FSMState, NodeActor.FSMData, NodeActor], TestProbe) = {
+  protected def init(peers: List[Node]): (TestFSMRef[NodeActor.FSMState, NodeActor.FSMData, NodeActor], TestProbe, TestProbe) = {
     val clusterInterfaceProbe = TestProbe()
     val clusterInterfaceProbeProps = TestTools.probeProps(clusterInterfaceProbe)
-    val node = TestFSMRef(new NodeActor(node1, peers, clusterInterfaceProbeProps,
+    val monitoringInterfaceProbe = TestProbe()
+    val monitoringInterfaceProbeProps = TestTools.probeProps(monitoringInterfaceProbe)
+    val node = TestFSMRef(new NodeActor(node1, peers, clusterInterfaceProbeProps, monitoringInterfaceProbeProps,
       electionTimeout, rpcResendTimeout))
-    (node, clusterInterfaceProbe)
+    (node, clusterInterfaceProbe, monitoringInterfaceProbe)
   }
 }

@@ -5,7 +5,7 @@ import scala.concurrent.duration._
 
 class FollowerTest extends TestBase {
   test("Case 1: must become a Candidate and RequestVote in ElectionTimeout after start if is receiving no cluster RPCs") {
-    val (node, clusterInterfaceProbe) = init(smallPeerList)
+    val (node, clusterInterfaceProbe, monitoringInterfaceProbe) = init(smallPeerList)
 
     // Must send two RequestVote
     val sent = clusterInterfaceProbe.expectMsgAllClassOf(

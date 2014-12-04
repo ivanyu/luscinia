@@ -7,3 +7,4 @@ sealed trait Endpoint {
 
 case class ClusterEndpoint(host: String, port: Int) extends Endpoint
 case class ClientEndpoint(host: String, port: Int) extends Endpoint
+case class MonitoringEndpoint(host: String, port: Int) extends Endpoint

@@ -12,8 +12,8 @@ object ClientInterface {
 }
 
 class ClientInterface(endpoint: ClientEndpoint)
-  extends HttpServiceActor with ActorLogging {
-  
+    extends HttpServiceActor with ActorLogging {
+
   override def preStart(): Unit = {
     IO(Http)(context.system) ! Http.Bind(self,
       interface = endpoint.host, port = endpoint.port)

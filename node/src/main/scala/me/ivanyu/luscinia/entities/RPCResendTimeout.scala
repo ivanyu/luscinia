@@ -1,3 +1,3 @@
 package me.ivanyu.luscinia.entities
 
-case class RPCResendTimeout(timeout: Int) extends AnyVal
+case class RPCResendTimeout(timeout: Int)

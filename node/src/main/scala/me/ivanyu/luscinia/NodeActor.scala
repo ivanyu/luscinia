@@ -1,6 +1,7 @@
 package me.ivanyu.luscinia
 
 import akka.actor._
+import me.ivanyu.luscinia.MonitoringInterface.{MonitoringMessage}
 import me.ivanyu.luscinia.entities._
 
 object NodeActor {
@@ -32,10 +33,7 @@ object NodeActor {
    * FSM data for the Follower state
    * @param currentTerm latest term the node has seen
    */
-  sealed case class FollowerData(currentTerm: Int = 0) extends FSMData {
-    def toCandidateData(candidate: Node, nodes: Traversable[Node]): CandidateData =
-      CandidateData(this.currentTerm + 1, nodes.toSet, Set(candidate))
-  }
+  sealed case class FollowerData(currentTerm: Int) extends FSMData
 
   /**
    * FSM data for the Candidate state
@@ -53,17 +51,17 @@ object NodeActor {
    * FSM data for the Leader state
    * @param currentTerm latest term the node has seen
    */
-  sealed case class LeaderData(currentTerm: Int = 0) extends FSMData {
-
-  }
+  sealed case class LeaderData(currentTerm: Int) extends FSMData
 
 
-  def props(thisNode: Node, otherNodes: Seq[Node],
+  def props(thisNode: Node,
+            peers: Seq[Node],
             clusterInterfaceProps: Props,
+            monitoringInterfaceProps: Props,
             electionTimeout: ElectionTimeout,
             rpcResendTimeout: RPCResendTimeout): Props = {
-    Props(classOf[NodeActor], thisNode, otherNodes,
-      clusterInterfaceProps,
+    Props(classOf[NodeActor], thisNode, peers,
+      clusterInterfaceProps, monitoringInterfaceProps,
       electionTimeout, rpcResendTimeout)
   }
 }
@@ -71,19 +69,22 @@ object NodeActor {
 class NodeActor(val thisNode: Node,
                 val peers: Seq[Node],
                 val clusterInterfaceProps: Props,
+                val monitoringInterfaceProps: Props,
                 val electionTimeout: ElectionTimeout,
                 val rpcResendTimeout: RPCResendTimeout)
     extends FSM[NodeActor.FSMState, NodeActor.FSMData] with ActorLogging {
 
-  import scala.concurrent.duration._
   import me.ivanyu.luscinia.ClusterInterface._
   import me.ivanyu.luscinia.NodeActor._
+
+import scala.concurrent.duration._
 
   val electionTimerName = "ElectionTimer"
   val resendRequestVoteTimerName = "ResendRequestVote"
   val heartbeatTimerName = "Heartbeat"
 
-  private val clusterInterface = context.actorOf(clusterInterfaceProps)
+  private val clusterInterface = context.actorOf(clusterInterfaceProps, "cluster-interface")
+  private val monitoringInterface = context.actorOf(monitoringInterfaceProps, "monitoring-interface")
 
   private val heartbeatTimeout = 50.millis
 
@@ -98,17 +99,20 @@ class NodeActor(val thisNode: Node,
   // Election majority
   val majority = Math.ceil((peers.length + 1) / 2.0).toInt
 
-  override def preStart(): Unit = scheduleElection()
+  override def preStart(): Unit = {
+    scheduleElection()
+    sendToMonitoring("Node started")
+  }
 
   private def scheduleElection(): Unit = {
     setTimer(electionTimerName, ElectionTick, electionTimeout.random)
   }
 
-  startWith(Follower, new FollowerData)
+  startWith(Follower, FollowerData(0))
 
   when(Follower) {
     case Event(ElectionTick, d: FollowerData) =>
-      goto(Candidate) using d.toCandidateData(thisNode, peers)
+      goto(Candidate) using CandidateData(d.currentTerm + 1, peers.toSet, Set(thisNode))
   }
 
   when(Candidate) {
@@ -150,6 +154,8 @@ class NodeActor(val thisNode: Node,
 
   onTransition {
     case _ -> Candidate =>
+      sendToMonitoring("Became Candidate")
+
       (nextStateData: @unchecked) match {
         case CandidateData(term, pending, _) =>
           pending.foreach { p =>
@@ -161,11 +167,16 @@ class NodeActor(val thisNode: Node,
       setTimer(resendRequestVoteTimerName, RequestVoteRPCResend, rpcResendTimeout.timeout.millis)
 
     case _ -> Leader =>
+      sendToMonitoring("Became Leader")
+
       (nextStateData: @unchecked) match {
         case LeaderData(term) =>
           sendHeartbeat(term)
           setTimer(heartbeatTimerName, HeartbeatTick, heartbeatTimeout)
       }
+
+    case _ -> Follower =>
+      sendToMonitoring("Became Follower")
   }
 
   when(Leader) {
@@ -191,6 +202,9 @@ class NodeActor(val thisNode: Node,
 
   initialize()
 
+  private def sendToMonitoring(msg: String): Unit = {
+    monitoringInterface ! MonitoringMessage(msg)
+  }
 
 /*  import context.dispatcher
   import me.ivanyu.luscinia.ClusterInterface._
