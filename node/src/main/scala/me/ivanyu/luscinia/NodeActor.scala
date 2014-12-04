@@ -8,8 +8,8 @@ object NodeActor {
   private sealed trait SchedulerMessage
   // Notification of election timeout
   private case object ElectionTick extends SchedulerMessage
-  // Notification of RequestVoteRPCResend timeout
-  private case object RequestVoteRPCResend extends SchedulerMessage
+  // Notification of RequestVoteRPCResendTick timeout
+  private case object RequestVoteRPCResendTick extends SchedulerMessage
   // Notification of heartbeat timeout
   private case object HeartbeatTick extends SchedulerMessage
 
@@ -112,36 +112,36 @@ import scala.concurrent.duration._
 
   when(Follower) {
     case Event(ElectionTick, d: FollowerData) =>
-      goto(Candidate) using CandidateData(d.currentTerm + 1, peers.toSet, Set(thisNode))
+      goto(Candidate) using CandidateData(d.currentTerm + 1, peers.toSet + thisNode, Set.empty)
   }
 
   when(Candidate) {
     // RequestVote response from one of the peers
-    case Event(RequestVoteResponse(responseTerm, voteGranted, sender, _), d: CandidateData) =>
+    case Event(RequestVoteResponse(responseTerm, voteGranted, repsSender, _), d: CandidateData) =>
       // If discovers higher/equal term, become a Follower
       if (responseTerm >= d.currentTerm)
         goto(Follower) using FollowerData(responseTerm)
 
       // If it's the last vote to get the majority, become the leader
       // Pay attention to double-senders
-      else if (!d.votedForMe.contains(sender) && voteGranted && d.votedForMe.size + 1 >= majority)
+      else if (!d.votedForMe.contains(repsSender) && voteGranted && d.votedForMe.size + 1 >= majority)
         goto(Leader) using LeaderData(d.currentTerm)
 
       else {
         val newData = d.copy(
-          requestVoteResultPending = d.requestVoteResultPending - sender,
-          votedForMe = if (voteGranted) d.votedForMe + sender else d.votedForMe)
-        setTimer(resendRequestVoteTimerName, RequestVoteRPCResend, rpcResendTimeout.timeout.millis)
+          requestVoteResultPending = d.requestVoteResultPending - repsSender,
+          votedForMe = if (voteGranted) d.votedForMe + repsSender else d.votedForMe)
+        setTimer(resendRequestVoteTimerName, RequestVoteRPCResendTick, rpcResendTimeout.timeout.millis)
         stay using newData
       }
 
     // Notification to resend RequestVote to peer that haven't answered yet
-    case Event(RequestVoteRPCResend, CandidateData(currentTerm, pending, _)) =>
+    case Event(RequestVoteRPCResendTick, CandidateData(currentTerm, pending, _)) =>
       pending.foreach { p =>
         clusterInterface !
           RequestVote(currentTerm, opLog.length - 1, opLog.last.term, thisNode, p)
       }
-      setTimer(resendRequestVoteTimerName, RequestVoteRPCResend, rpcResendTimeout.timeout.millis)
+      setTimer(resendRequestVoteTimerName, RequestVoteRPCResendTick, rpcResendTimeout.timeout.millis)
       stay
 
     // Notification of election timeout during election => haven't got the majority, restart the election
@@ -158,13 +158,17 @@ import scala.concurrent.duration._
 
       (nextStateData: @unchecked) match {
         case CandidateData(term, pending, _) =>
-          pending.foreach { p =>
+          // Vote for self
+          self ! RequestVoteResponse(term - 1, voteGranted = true, thisNode, thisNode)
+
+          val pendingPeers = pending - thisNode
+          pendingPeers.foreach { p =>
             clusterInterface !
               RequestVote(term, opLog.length - 1, opLog.last.term, thisNode, p)
           }
       }
       setTimer(electionTimerName, ElectionTick, electionTimeout.random)
-      setTimer(resendRequestVoteTimerName, RequestVoteRPCResend, rpcResendTimeout.timeout.millis)
+      setTimer(resendRequestVoteTimerName, RequestVoteRPCResendTick, rpcResendTimeout.timeout.millis)
 
     case _ -> Leader =>
       sendToMonitoring("Became Leader")

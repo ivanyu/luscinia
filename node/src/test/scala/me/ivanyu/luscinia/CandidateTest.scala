@@ -116,4 +116,12 @@ class CandidateTest extends TestBase {
       (electionTimeout.max + timingEpsilon).milliseconds,
       List.fill(largePeerList.size)(classOf[AppendEntries]):_*)
   }
+
+  test("Case 7: Must elect himself in solitude") {
+    val (node, clusterInterfaceProbe, monitoringInterfaceProbe) = init(Nil)
+
+    clusterInterfaceProbe.expectNoMsg((electionTimeout.max + timingEpsilon).milliseconds)
+
+    assert(node.stateName == Leader)
+  }
 }
