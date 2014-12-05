@@ -4,12 +4,11 @@ import java.util.Date
 
 import akka.actor._
 import akka.io.IO
-import me.ivanyu.luscinia.MonitoringInterface.MonitoringMessage
 import me.ivanyu.luscinia.entities.MonitoringEndpoint
 import spray.can.Http
 import spray.can.server.UHttp
-import spray.can.websocket.{UpgradedToWebSocket, WebSocketServerWorker}
 import spray.can.websocket.frame.TextFrame
+import spray.can.websocket.{UpgradedToWebSocket, WebSocketServerWorker}
 import spray.routing.HttpServiceActor
 
 object MonitoringInterface {
@@ -17,10 +16,16 @@ object MonitoringInterface {
 
   def props(endpoint: MonitoringEndpoint): Props =
     Props(classOf[MonitoringInterface], endpoint)
+
+  private def jsonifyMessage(msg: MonitoringMessage): String = {
+    s"""{"ts":"${msg.timestamp}", "msg": "${msg.msg}"}"""
+  }
 }
 
 class MonitoringInterface(endpoint: MonitoringEndpoint)
     extends Actor with ActorLogging {
+
+  import me.ivanyu.luscinia.MonitoringInterface._
 
   private var messages: List[MonitoringMessage] = Nil
 
@@ -29,15 +34,17 @@ class MonitoringInterface(endpoint: MonitoringEndpoint)
 
     private var _initialMessages: Option[List[MonitoringMessage]] = Some(initialMessages)
 
+    private val sendMessage = jsonifyMessage _ andThen TextFrame.apply andThen send
+
     override def businessLogic: Receive = {
       case UpgradedToWebSocket =>
         // Send initial bunch of messages
-        _initialMessages.map { msgs => msgs.foreach(m => send(TextFrame(m.msg))) }
+        if (_initialMessages.nonEmpty)
+          _initialMessages.get.foreach(sendMessage)
         _initialMessages = None
 
       // Messages from the parent
-      case MonitoringMessage(msg, date) =>
-        send(TextFrame(msg))
+      case m: MonitoringMessage => sendMessage(m)
     }
   }
 
