@@ -10,6 +10,8 @@ resolvers ++= Seq(
   "Spray Repository"    at "http://repo.spray.io/"
 )
 
+val sprayVersion = "1.3.2"
+
 libraryDependencies ++= Seq(
 //  "com.typesafe.akka" %% "akka-actor" % "2.3.6",
 //  "com.typesafe.akka" %% "akka-testkit" % "2.3.6" % "test",
@@ -17,9 +19,10 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-testkit" % "2.4-20141121-230846" % "test",
   "org.scalatest" %% "scalatest" % "2.2.1" % "test",
   "com.typesafe" % "config" % "1.2.1",
-  "io.spray" %% "spray-can"     % "1.3.2",
-  "io.spray" %% "spray-routing" % "1.3.2",
-  "io.spray" %% "spray-client"  % "1.3.2",
+  "io.spray" %% "spray-can"     % sprayVersion,
+  "io.spray" %% "spray-routing" % sprayVersion,
+  "io.spray" %% "spray-client"  % sprayVersion,
+//  "io.spray" %% "spray-json" % "1.3.1",
   "com.wandoulabs.akka" %% "spray-websocket" % "0.1.3",
   "org.scala-lang" % "scala-reflect" % scalaVersion.value
 )
