@@ -13,13 +13,11 @@ resolvers ++= Seq(
   "Spray Repository"    at "http://repo.spray.io/"
 )
 
-val akkaVersion = "2.4-SNAPSHOT"
+val akkaVersion = "2.4-20141121-230846"
 
 val sprayVersion = "1.3.2"
 
 libraryDependencies ++= Seq(
-//  "com.typesafe.akka" %% "akka-actor" % "2.3.6",
-//  "com.typesafe.akka" %% "akka-testkit" % "2.3.6" % "test",
   "com.typesafe.akka" %% "akka-actor"   % akkaVersion,
   "com.typesafe.akka" %% "akka-testkit" % akkaVersion % "test",
   "org.scalatest" %% "scalatest" % "2.2.1" % "test",
@@ -27,8 +25,7 @@ libraryDependencies ++= Seq(
   "io.spray" %% "spray-can"     % sprayVersion,
   "io.spray" %% "spray-routing" % sprayVersion,
   "io.spray" %% "spray-client"  % sprayVersion,
-  "com.wandoulabs.akka" %% "spray-websocket" % "0.1.3",
-  "org.scala-lang" % "scala-reflect" % scalaVersion.value
+  "com.wandoulabs.akka" %% "spray-websocket" % "0.1.3"
 )
 
 scalacOptions ++= Seq(
