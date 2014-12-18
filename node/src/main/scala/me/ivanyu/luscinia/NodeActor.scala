@@ -104,10 +104,8 @@ class NodeActor(val thisNode: Node,
   private val clusterInterface = context.actorOf(clusterInterfaceProps, "cluster-interface")
   private val monitoringInterface = context.actorOf(monitoringInterfaceProps, "monitoring-interface")
 
+  // TODO move heartbeatTimeout to config
   private val heartbeatTimeout = 50.millis
-
-//  Operation log
-//  var opLog = Vector[LogEntry](LogEntry(Term.start, EmptyOperation))
 
   // Index of highest log entry known to be commited
   var commitIndex = -1
@@ -255,6 +253,7 @@ class NodeActor(val thisNode: Node,
       log.info("Became a Candidate")
       sendToMonitoring("Became a Candidate")
 
+      // When become a Candidate, request votes from peers
       (nextStateData: @unchecked) match {
         case CandidateData(term, opLog, pending, _) =>
           // Vote for self
@@ -273,6 +272,7 @@ class NodeActor(val thisNode: Node,
       log.info("Became the Leader")
       sendToMonitoring("Became the Leader")
 
+      // When become the Leader, send heartbeat RPCs immediately
       (nextStateData: @unchecked) match {
         case LeaderData(term, _) =>
           sendHeartbeat(term)
@@ -286,18 +286,11 @@ class NodeActor(val thisNode: Node,
 
   when(Leader) {
     commonBehavior orElse {
-      // Notification to heartbeat
+      // Notification of heartbeat
       case Event(HeartbeatTick, LeaderData(currentTerm, _)) =>
         sendHeartbeat(currentTerm)
         setTimer(heartbeatTimerName, HeartbeatTick, heartbeatTimeout)
         stay()
-    }
-  }
-
-  private def sendHeartbeat(term: Term): Unit = {
-    peers.foreach { p =>
-      // TODO prevLogIndex etc.
-      clusterInterface ! AppendEntries(term, 0, Term.start, List.empty, 0, thisNode, p)
     }
   }
 
@@ -309,6 +302,22 @@ class NodeActor(val thisNode: Node,
 
   initialize()
 
+  /**
+   * Send heartbeat RPC to peers to ensure cluster integrity
+   * @param term current term
+   */
+  private def sendHeartbeat(term: Term): Unit = {
+    peers.foreach { p =>
+      // TODO prevLogIndex etc.
+      clusterInterface ! AppendEntries(term, 0, Term.start, List.empty, 0, thisNode, p)
+    }
+  }
+
+  // TODO redesign for sending more information (like timestamp)
+  /**
+    * Send message to monitoring
+   * @param msg message
+   */
   private def sendToMonitoring(msg: String): Unit = {
     monitoringInterface ! MonitoringMessage(msg)
   }

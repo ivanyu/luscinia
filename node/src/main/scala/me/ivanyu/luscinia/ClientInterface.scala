@@ -37,7 +37,7 @@ class ClientInterface(endpoint: ClientEndpoint)
 
   override def preStart(): Unit = {
     IO(Http)(context.system) ! Http.Bind(self,
-      interface = endpoint.host, port = endpoint.port)
+      interface = endpoint.address, port = endpoint.port)
   }
 
   private val askTimeout = 1.second
@@ -45,7 +45,7 @@ class ClientInterface(endpoint: ClientEndpoint)
   private implicit val ec = context.dispatcher
 
   // TODO test client interface
-  // TODO rewrite client interface
+  // TODO think about REST API and rewrite client interface
   override def receive: Actor.Receive = runRoute {
     path("v" / Segment) { key =>
       get { ctx =>
@@ -58,14 +58,14 @@ class ClientInterface(endpoint: ClientEndpoint)
       }~
       put { ctx =>
         val value = ctx.request.entity.asString
-        val f = ask(context.parent, SetValue(key, value)).mapTo[SetValueResult]
+        val f = ask(context.parent, SetValue(key, value))(askTimeout).mapTo[SetValueResult]
         f.onComplete {
           case Success(`SetValueAck`) => ctx.complete("")
           case _ => ctx.complete(StatusCodes.InternalServerError)
         }
       }~
       delete { ctx =>
-        val f = ask(context.parent, DeleteValue(key)).mapTo[DeleteValueResult]
+        val f = ask(context.parent, DeleteValue(key))(askTimeout).mapTo[DeleteValueResult]
         f.onComplete {
           case Success(DeleteValueAck(deletedValue)) => ctx.complete("") // TODO return deleted value
           case _ => ctx.complete(StatusCodes.InternalServerError)

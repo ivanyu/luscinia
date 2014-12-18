@@ -7,6 +7,7 @@ object Main extends App {
   val system = ActorSystem("luscinia-node")
 
   // TODO read config and args
+  // TODO do some integration tests
 
   val thisNode = Node("node1",
     ClusterEndpoint("localhost", 8091),

@@ -1,10 +1,32 @@
 package me.ivanyu.luscinia.entities
 
+/**
+ * Network endpoint
+ */
 sealed trait Endpoint {
-  def host: String
-  def port: Int
+  // Address
+  val address: String
+  // Port
+  val port: Int
 }
 
-case class ClusterEndpoint(host: String, port: Int) extends Endpoint
-case class ClientEndpoint(host: String, port: Int) extends Endpoint
-case class MonitoringEndpoint(host: String, port: Int) extends Endpoint
+/**
+ * Network endpoint to connect to the peers
+ * @param address address
+ * @param port port
+ */
+case class ClusterEndpoint(address: String, port: Int) extends Endpoint
+
+/**
+ * Network endpoint for client connection
+ * @param address address
+ * @param port port
+ */
+case class ClientEndpoint(address: String, port: Int) extends Endpoint
+
+/**
+ * Network endpoint for monitoring
+ * @param address address
+ * @param port port
+ */
+case class MonitoringEndpoint(address: String, port: Int) extends Endpoint

@@ -50,7 +50,7 @@ class MonitoringInterface(endpoint: MonitoringEndpoint)
 
   override def preStart(): Unit = {
     IO(UHttp)(context.system) !
-      Http.Bind(self, interface = endpoint.host, port = endpoint.port)
+      Http.Bind(self, interface = endpoint.address, port = endpoint.port)
   }
 
   override def receive: Receive = {
