@@ -15,7 +15,6 @@ object NodeActor {
   // Notification of heartbeat timeout
   private case object HeartbeatTick extends SchedulerMessage
 
-
   // Node's states
 
   sealed trait FSMState
@@ -28,32 +27,47 @@ object NodeActor {
    */
   sealed trait FSMData {
     // Latest term the node has seen
-    val currentTerm: Int
+    val currentTerm: Term
+    // Operation log
+    val opLog: Vector[LogEntry]
+  }
+
+  object FSMData {
+    def unapply(d: FSMData): Option[(Term, Vector[LogEntry])] = {
+      if (d != null) Some(d.currentTerm, d.opLog)
+      else None
+    }
   }
 
   /**
    * FSM data for the Follower state
    * @param currentTerm latest term the node has seen
+   * @param opLog operation log
+   * @param votedFor node a follower voted for
    */
-  sealed case class FollowerData(currentTerm: Int) extends FSMData
+  sealed case class FollowerData(currentTerm: Term,
+                                 opLog: Vector[LogEntry],
+                                 votedFor: Option[Node]) extends FSMData
 
   /**
    * FSM data for the Candidate state
    * @param currentTerm latest term the node has seen
+   * @param opLog operation log
    * @param requestVoteResultPending nodes we're waiting a response on RequestVote RPC from
    * @param votedForMe nodes voted for the candidate
    */
-  sealed case class CandidateData(
-    currentTerm: Int,
-    requestVoteResultPending: Set[Node],
-    votedForMe: Set[Node]
-  ) extends FSMData
+  sealed case class CandidateData(currentTerm: Term,
+                                  opLog: Vector[LogEntry],
+                                  requestVoteResultPending: Set[Node],
+                                  votedForMe: Set[Node]) extends FSMData
 
   /**
    * FSM data for the Leader state
    * @param currentTerm latest term the node has seen
+   * @param opLog operation log
    */
-  sealed case class LeaderData(currentTerm: Int) extends FSMData
+  sealed case class LeaderData(currentTerm: Term,
+                               opLog: Vector[LogEntry]) extends FSMData
 
 
   def props(thisNode: Node,
@@ -79,7 +93,7 @@ class NodeActor(val thisNode: Node,
   import me.ivanyu.luscinia.ClusterInterface._
   import me.ivanyu.luscinia.NodeActor._
 
-import scala.concurrent.duration._
+  import scala.concurrent.duration._
 
   val electionTimerName = "ElectionTimer"
   val resendRequestVoteTimerName = "ResendRequestVote"
@@ -92,13 +106,13 @@ import scala.concurrent.duration._
 
   private val heartbeatTimeout = 50.millis
 
-  // Operation log
-  val opLog = Vector[LogEntry](LogEntry(0, EmptyOperation))
+//  Operation log
+//  var opLog = Vector[LogEntry](LogEntry(Term.start, EmptyOperation))
 
   // Index of highest log entry known to be commited
-  var commitIndex = 0
+  var commitIndex = -1
   // Index of highest log entry applied to state machine
-  var lastApplied = 0
+  var lastApplied = -1
 
   var lastRPCFromLeader: Option[Long] = None
 
@@ -114,76 +128,126 @@ import scala.concurrent.duration._
     setTimer(electionTimerName, ElectionTick, electionTimeout.random)
   }
 
-  startWith(Follower, FollowerData(0))
+  startWith(Follower, FollowerData(currentTerm = Term.start, opLog = Vector[LogEntry](), votedFor = None))
+
+  val commonBehavior: PartialFunction[Event, State] = {
+    case Event(AppendEntries(term, prevLogIndex, prevLogTerm, entries, leaderCommit, rpcSender, _), FSMData(currentTerm, opLog)) =>
+      if (term < currentTerm) {
+        clusterInterface ! AppendEntriesResponse(currentTerm, success = false, thisNode, rpcSender)
+        stay()
+      } else {
+        lastRPCFromLeader = Some(calendar.getTimeInMillis)
+        resetElectionTimer()
+
+        // We'll accept Leader's term later
+        val newTerm = term
+        val (success, newOpLog) =
+          if (prevLogIndex < opLog.length && opLog(prevLogIndex).term != prevLogTerm) (false, opLog)
+          else
+            // Throw away (possibly zero) invalid items and append new ones
+            (true, opLog.take(prevLogIndex + 1) ++ entries.map(LogEntry(term, _)))
+
+        // Commit index
+        if (leaderCommit > commitIndex)
+          commitIndex = Math.min(leaderCommit, opLog.length - 1)
+
+        clusterInterface ! AppendEntriesResponse(newTerm, success, thisNode, rpcSender)
+
+        val newFollowerData = FollowerData(newTerm, opLog = newOpLog, votedFor = None)
+        if (term > currentTerm && (stateName == Leader || stateName == Candidate))
+          goto(Follower) using newFollowerData
+        else
+          stay() using newFollowerData
+      }
+
+    case Event(RequestVote(term, lastLogIndex, lastLogTerm, rpcSender, _), d @ FSMData(currentTerm, opLog)) =>
+      if (term < currentTerm) {
+        clusterInterface ! RequestVoteResponse(currentTerm, voteGranted = false, thisNode, rpcSender)
+        stay()
+      } else {
+        val newTerm = term
+
+        val (shouldVoteFor, votedFor) = d match {
+          case FollowerData(_, _, Some(vf)) if vf != rpcSender =>
+            // Already voted for another peer
+            (false, Some(vf))
+          case _ =>
+            // Check if sender's log is complete
+            val shouldVoteFor =
+              if (opLog.last.term < lastLogTerm) true
+              else if (opLog.last.term == lastLogTerm) lastLogIndex >= opLog.length - 1
+              else false
+            (shouldVoteFor, None)
+        }
+
+        val newFollowerData = FollowerData(newTerm, opLog, votedFor = votedFor)
+
+        clusterInterface ! RequestVoteResponse(newTerm, voteGranted = shouldVoteFor, thisNode, rpcSender)
+
+        if (term > currentTerm && (stateName == Leader || stateName == Candidate))
+          goto(Follower) using newFollowerData
+        else
+          stay() using newFollowerData
+      }
+  }
 
   when(Follower) {
-    case Event(_: AppendEntries, d: FollowerData) =>
-      resetElectionTimer()
-      lastRPCFromLeader = Some(calendar.getTimeInMillis)
-      stay()
-
-    case Event(ElectionTick, d: FollowerData) =>
-      // Prevent false triggering
-      val currentMillis = calendar.getTimeInMillis
-      val falseTriggering = lastRPCFromLeader match {
-        case Some(lastRPC) if lastRPC - currentMillis < electionTimeout.min => true
-        case _ => false
-      }
-      if (!falseTriggering)
-        goto(Candidate) using CandidateData(d.currentTerm + 1, peers.toSet + thisNode, Set.empty)
-      else
-        stay()
+    commonBehavior orElse {
+      case Event(ElectionTick, FollowerData(currentTerm, opLog, _)) =>
+        // Prevent false triggering
+        val currentMillis = calendar.getTimeInMillis
+        val falseTriggering = lastRPCFromLeader match {
+          case Some(lastRPC) if lastRPC - currentMillis < electionTimeout.min => true
+          case _ => false
+        }
+        if (!falseTriggering)
+          goto(Candidate) using CandidateData(currentTerm.next, opLog, peers.toSet + thisNode, Set.empty)
+        else
+          stay()
+    }
   }
 
   when(Candidate) {
-    // RequestVote response from one of the peers
-    case Event(RequestVoteResponse(responseTerm, voteGranted, respSender, _), d: CandidateData) =>
-      // If discovers higher/equal term, become a Follower
-      if (responseTerm >= d.currentTerm) {
-        log.info("Higher term detected, step back to Follower")
-        sendToMonitoring("Higher term detected, step back to Follower")
-        goto(Follower) using FollowerData(responseTerm)
-      }
+    commonBehavior orElse {
+      // RequestVote response from one of the peers
+      case Event(RequestVoteResponse(responseTerm, voteGranted, rpcSender, _), d: CandidateData) =>
+        // If discovers higher/equal term, become a Follower
+        if (responseTerm >= d.currentTerm) {
+          goto(Follower) using FollowerData(responseTerm, d.opLog, votedFor = None)
+        }
 
-      // If it's the last vote to get the majority, become the leader
-      // Pay attention to double-senders
-      else if (!d.votedForMe.contains(respSender) && voteGranted && d.votedForMe.size + 1 >= majority) {
-        log.info(s"Got vote from ${respSender.id}")
-        sendToMonitoring(s"Got vote from ${respSender.id}")
+        // If it's the last vote to get the majority, become the leader
+        // Pay attention to double-senders
+        else if (!d.votedForMe.contains(rpcSender) && voteGranted && d.votedForMe.size + 1 >= majority) {
+          goto(Leader) using LeaderData(d.currentTerm, d.opLog)
+        }
 
-        log.info("Got the majority, becoming the Leader")
-        sendToMonitoring("Got the majority, becoming the Leader")
-        goto(Leader) using LeaderData(d.currentTerm)
-      }
+        else {
+          log.info(s"Got vote from ${rpcSender.id}")
+          sendToMonitoring(s"Got vote from ${rpcSender.id}")
 
-      else {
-        log.info(s"Got vote from ${respSender.id}")
-        sendToMonitoring(s"Got vote from ${respSender.id}")
+          val newData = d.copy(
+            requestVoteResultPending = d.requestVoteResultPending - rpcSender,
+            votedForMe = if (voteGranted) d.votedForMe + rpcSender else d.votedForMe)
+          setTimer(resendRequestVoteTimerName, RequestVoteRPCResendTick, rpcResendTimeout.timeout.millis)
+          stay using newData
+        }
 
-        val newData = d.copy(
-          requestVoteResultPending = d.requestVoteResultPending - respSender,
-          votedForMe = if (voteGranted) d.votedForMe + respSender else d.votedForMe)
+      // Notification to resend RequestVote to peer that haven't answered yet
+      case Event(RequestVoteRPCResendTick, CandidateData(currentTerm, opLog, pending, _)) =>
+        pending.foreach { p =>
+          clusterInterface !
+            RequestVote(currentTerm, opLog.length - 1, opLog.last.term, thisNode, p)
+        }
         setTimer(resendRequestVoteTimerName, RequestVoteRPCResendTick, rpcResendTimeout.timeout.millis)
-        stay using newData
-      }
+        stay()
 
-    // Notification to resend RequestVote to peer that haven't answered yet
-    case Event(RequestVoteRPCResendTick, CandidateData(currentTerm, pending, _)) =>
-      pending.foreach { p =>
-        clusterInterface !
-          RequestVote(currentTerm, opLog.length - 1, opLog.last.term, thisNode, p)
-      }
-      setTimer(resendRequestVoteTimerName, RequestVoteRPCResendTick, rpcResendTimeout.timeout.millis)
-      stay()
-
-    // Notification of election timeout during election => haven't got the majority, restart the election
-    case Event(ElectionTick, d: CandidateData) =>
-      log.info("Didn't get the majority, restarting the election")
-      sendToMonitoring("Didn't get the majority, restarting the election")
-      goto(Candidate) using CandidateData(d.currentTerm + 1, peers.toSet, Set(thisNode))
-
-    case Event(AppendEntries(leaderTerm, _, _, _, _, _, _), _) =>
-      goto(Follower) using FollowerData(leaderTerm)
+      // Notification of election timeout during election => haven't got the majority, restart the election
+      case Event(ElectionTick, d: CandidateData) =>
+        log.info("Didn't get the majority, restarting the election")
+        sendToMonitoring("Didn't get the majority, restarting the election")
+        goto(Candidate) using CandidateData(d.currentTerm.next, d.opLog, peers.toSet, Set(thisNode))
+    }
   }
 
   onTransition {
@@ -192,9 +256,9 @@ import scala.concurrent.duration._
       sendToMonitoring("Became a Candidate")
 
       (nextStateData: @unchecked) match {
-        case CandidateData(term, pending, _) =>
+        case CandidateData(term, opLog, pending, _) =>
           // Vote for self
-          self ! RequestVoteResponse(term - 1, voteGranted = true, thisNode, thisNode)
+          self ! RequestVoteResponse(term.prev, voteGranted = true, thisNode, thisNode)
 
           val pendingPeers = pending - thisNode
           pendingPeers.foreach { p =>
@@ -210,7 +274,7 @@ import scala.concurrent.duration._
       sendToMonitoring("Became the Leader")
 
       (nextStateData: @unchecked) match {
-        case LeaderData(term) =>
+        case LeaderData(term, _) =>
           sendHeartbeat(term)
           setTimer(heartbeatTimerName, HeartbeatTick, heartbeatTimeout)
       }
@@ -221,17 +285,19 @@ import scala.concurrent.duration._
   }
 
   when(Leader) {
-    // Notification to heartbeat
-    case Event(HeartbeatTick, LeaderData(currentTerm)) =>
-      sendHeartbeat(currentTerm)
-      setTimer(heartbeatTimerName, HeartbeatTick, heartbeatTimeout)
-      stay()
+    commonBehavior orElse {
+      // Notification to heartbeat
+      case Event(HeartbeatTick, LeaderData(currentTerm, _)) =>
+        sendHeartbeat(currentTerm)
+        setTimer(heartbeatTimerName, HeartbeatTick, heartbeatTimeout)
+        stay()
+    }
   }
 
-  private def sendHeartbeat(term: Int): Unit = {
+  private def sendHeartbeat(term: Term): Unit = {
     peers.foreach { p =>
       // TODO prevLogIndex etc.
-      clusterInterface ! AppendEntries(term, 0, 0, List.empty, 0, thisNode, p)
+      clusterInterface ! AppendEntries(term, 0, Term.start, List.empty, 0, thisNode, p)
     }
   }
 
@@ -251,93 +317,4 @@ import scala.concurrent.duration._
     cancelTimer(electionTimerName)
     setTimer(electionTimerName, ElectionTick, electionTimeout.random)
   }
-
-/*  import context.dispatcher
-  import me.ivanyu.luscinia.ClusterInterface._
-
-  private val clusterInterface = context.actorOf(clusterInterfaceProps)
-
-  private var electionTick: Option[Cancellable] = None
-
-  // Operation log
-  val opLog = Vector[LogEntry](LogEntry(0, EmptyOperation))
-
-  // Latest term the node has seen
-  var currentTerm = 0
-  // Index of highest log entry known to be commited
-  var commitIndex = 0
-  // Index of highest log entry applied to state machine
-  var lastApplied = 0
-
-  var votedFor: Option[Node] = None
-
-  override def preStart(): Unit = scheduleElection()
-
-  private def scheduleElection(): Unit = {
-    electionTick.map(_.cancel())
-    electionTick = Some {
-      context.system.scheduler.scheduleOnce(electionTimeout.random, self, ElectionTick)
-    }
-  }
-
-  override def receive: Actor.Receive = followerBehavior
-
-  private def followerBehavior: Receive = {
-    case ElectionTick =>
-      currentTerm += 1
-      otherNodes.foreach { n =>
-        clusterInterface !
-          RequestVote(currentTerm, opLog.length - 1, opLog.last.term, thisNode, n)
-      }
-      context.become(candidateBehavior)
-      //scheduleElection()
-
-    case msg: RequestVote =>
-      log.info(msg.toString)
-      sender ! handleRequestVote(msg)
-
-    case msg =>
-      log.info(msg.toString)
-  }
-
-  private def handleRequestVote(msg: RequestVote): RequestVoteResult = {
-    if (votedFor.nonEmpty || msg.term < currentTerm) {
-      RequestVoteResult(currentTerm, voteGranted = false)
-    } else {
-      if (opLog.last.term > msg.lastLogTerm
-          || opLog.length <= msg.lastLogIndex) {
-        RequestVoteResult(currentTerm, voteGranted = false)
-      } else {
-        votedFor = Some(msg.candidate)
-        RequestVoteResult(currentTerm, voteGranted = true)
-      }
-    }
-  }
-
-  private def candidateBehavior: Receive = {
-    case _ =>
-  }*/
-
-
-/*
-  private def valuesBehavior: Receive = {
-    case GetValue(key) =>
-      val value = storage.get(key)
-      log.info(s"Get value request, key '$key', value '$value'")
-      sender ! value
-
-    case SetValue(key, value) =>
-      log.info(s"Set value request, key '$key', value '$value'")
-      storage += (key -> value)
-      sender ! OperationAck
-
-    case DeleteValue(key) =>
-      log.info(s"Delete value request, key '$key'")
-      storage -= key
-      sender ! OperationAck
-
-//    case x =>
-//      log.info(x.toString)
-  }
-*/
 }

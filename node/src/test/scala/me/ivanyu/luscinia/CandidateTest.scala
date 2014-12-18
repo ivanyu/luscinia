@@ -3,6 +3,7 @@ package me.ivanyu.luscinia
 import akka.actor.Kill
 import me.ivanyu.luscinia.ClusterInterface.{AppendEntries, RequestVote, RequestVoteResponse}
 import me.ivanyu.luscinia.NodeActor.{Candidate, Follower, Leader}
+import me.ivanyu.luscinia.entities.Term
 
 import scala.concurrent.duration._
 
@@ -19,7 +20,7 @@ class CandidateTest extends TestBase {
     }.head
 
     // node3 has responded, node2 hasn't
-    clusterInterfaceProbe.send(node, ClusterInterface.RequestVoteResponse(0, voteGranted = false, node3, node1))
+    clusterInterfaceProbe.send(node, ClusterInterface.RequestVoteResponse(Term(0), voteGranted = false, node3, node1))
 
     // The candidate should resend RequestVote for node2
     clusterInterfaceProbe.expectMsgPF((rpcResendTimeout.timeout * 2 + timingEpsilon).milliseconds) {
@@ -37,8 +38,8 @@ class CandidateTest extends TestBase {
       List.fill(smallPeerList.size)(classOf[RequestVote]):_*)
     val initialTerm = initiallySentRPC.head.term
 
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node2, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node3, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = false, node2, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = false, node3, node1))
 
     val secondarySentRPC = clusterInterfaceProbe.expectMsgAllClassOf(
       (electionTimeout.max * 2 + timingEpsilon).milliseconds,
@@ -47,7 +48,7 @@ class CandidateTest extends TestBase {
 
     println(secondarySentRPC)
     assert(secondarySentRPC.length == initiallySentRPC.length)
-    assert(secondaryTerm == initialTerm + 1)
+    assert(secondaryTerm == initialTerm.next)
 
     node ! Kill
   }
@@ -61,7 +62,7 @@ class CandidateTest extends TestBase {
     val initialTerm = initiallySentRPC.head.term
 
     // RPC from the actual leader
-    clusterInterfaceProbe.send(node, AppendEntries(10, 1, 10, List.empty, 0, node2, node1))
+    clusterInterfaceProbe.send(node, AppendEntries(Term(10), 1, Term(10), List.empty, 0, node2, node1))
 
     assert(node.stateName == Follower)
 
@@ -76,7 +77,7 @@ class CandidateTest extends TestBase {
       List.fill(smallPeerList.size)(classOf[RequestVote]):_*)
     initiallySentRPC.head.term
 
-    clusterInterfaceProbe.send(node, RequestVoteResponse(10, voteGranted = false, node2, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(10), voteGranted = false, node2, node1))
 
     assert(node.stateName == Follower)
 
@@ -91,12 +92,12 @@ class CandidateTest extends TestBase {
       List.fill(largePeerList.size)(classOf[RequestVote]):_*)
 
     // One vote for, but multiple times
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = true, node2, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node3, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = true, node2, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node4, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = true, node2, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node5, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = true, node2, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = false, node3, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = true, node2, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = false, node4, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = true, node2, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = false, node5, node1))
 
     // Must remain candidate
     assert(node.stateName == Candidate)
@@ -116,10 +117,10 @@ class CandidateTest extends TestBase {
       (electionTimeout.max + timingEpsilon).milliseconds,
       List.fill(largePeerList.size)(classOf[RequestVote]):_*)
 
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = true, node2, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = true, node3, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node4, node1))
-    clusterInterfaceProbe.send(node, RequestVoteResponse(0, voteGranted = false, node5, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = true, node2, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = true, node3, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = false, node4, node1))
+    clusterInterfaceProbe.send(node, RequestVoteResponse(Term(0), voteGranted = false, node5, node1))
 
     assert(node.stateName == Leader)
 

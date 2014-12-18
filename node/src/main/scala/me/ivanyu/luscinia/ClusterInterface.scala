@@ -1,7 +1,7 @@
 package me.ivanyu.luscinia
 
 import akka.actor.{ActorLogging, Props}
-import me.ivanyu.luscinia.entities.{LogOperation, Node}
+import me.ivanyu.luscinia.entities.{Term, LogOperation, Node}
 import spray.routing.HttpServiceActor
 
 object ClusterInterface {
@@ -20,9 +20,9 @@ object ClusterInterface {
    * @param sender sender-leader
    * @param receiver receiver-peer
    */
-  case class AppendEntries(term: Int,
+  case class AppendEntries(term: Term,
                            prevLogIndex: Int,
-                           prevLogTerm: Int,
+                           prevLogTerm: Term,
                            entries: List[LogOperation],
                            leaderCommit: Int,
                            sender: Node,
@@ -35,7 +35,7 @@ object ClusterInterface {
    * @param sender sender-peer
    * @param receiver receiver-leader
    */
-  case class AppendEntriesResult(term: Int,
+  case class AppendEntriesResponse(term: Term,
                                  success: Boolean,
                                  sender: Node,
                                  receiver: Node) extends ClusterRPC
@@ -48,9 +48,9 @@ object ClusterInterface {
    * @param sender sender-candidate
    * @param receiver receiver-peer
    */
-  case class RequestVote(term: Int,
+  case class RequestVote(term: Term,
                          lastLogIndex: Int,
-                         lastLogTerm: Int,
+                         lastLogTerm: Term,
                          sender: Node,
                          receiver: Node) extends ClusterRPC
 
@@ -61,7 +61,7 @@ object ClusterInterface {
    * @param sender sender-peer
    * @param receiver receiver-candidate
    */
-  case class RequestVoteResponse(term: Int,
+  case class RequestVoteResponse(term: Term,
                                  voteGranted: Boolean,
                                  sender: Node,
                                  receiver: Node) extends ClusterRPC

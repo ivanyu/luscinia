@@ -39,6 +39,8 @@ abstract class TestBase extends TestKit(ActorSystem("Test"))
   protected val electionTimeout = ElectionTimeout(150, 300)
   protected val rpcResendTimeout = RPCResendTimeout(60)
 
+  protected val emptyLog = Vector(LogEntry(Term.start, EmptyOperation))
+
   protected val timingEpsilon = 30
 
   override protected def afterAll(): Unit = system.terminate()
