@@ -74,6 +74,8 @@ object ClusterInterface {
 class ClusterInterface(val thisNode: Node, otherNodes: Set[Node])
   extends HttpServiceActor with ActorLogging {
 
+  // TODO implement cluster interface
+
   override def receive: Receive = {
     case _ =>
   }
