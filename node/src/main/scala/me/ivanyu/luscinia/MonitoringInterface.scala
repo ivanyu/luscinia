@@ -29,8 +29,8 @@ class MonitoringInterface(endpoint: MonitoringEndpoint)
 
   private var messages: List[MonitoringMessage] = Nil
 
-  private class Worker (val serverConnection: ActorRef, initialMessages: List[MonitoringMessage]) extends HttpServiceActor
-      with WebSocketServerWorker with ActorLogging {
+  private class Worker (val serverConnection: ActorRef, initialMessages: List[MonitoringMessage])
+      extends HttpServiceActor with WebSocketServerWorker with ActorLogging {
 
     private var _initialMessages: Option[List[MonitoringMessage]] = Some(initialMessages)
 

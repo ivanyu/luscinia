@@ -45,7 +45,8 @@ abstract class TestBase extends TestKit(ActorSystem("Test"))
 
   override protected def afterAll(): Unit = system.terminate()
 
-  protected def init(peers: List[Node]): (TestFSMRef[NodeActor.FSMState, NodeActor.FSMData, NodeActor], TestProbe, TestProbe) = {
+  protected def init(peers: List[Node]):
+      (TestFSMRef[NodeActor.FSMState, NodeActor.FSMData, NodeActor], TestProbe, TestProbe) = {
     val clusterInterfaceProbe = TestProbe()
     val clusterInterfaceProbeProps = TestTools.probeProps(clusterInterfaceProbe)
     val monitoringInterfaceProbe = TestProbe()

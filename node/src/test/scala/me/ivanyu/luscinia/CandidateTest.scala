@@ -20,7 +20,8 @@ class CandidateTest extends TestBase {
     }.head
 
     // node3 has responded, node2 hasn't
-    clusterInterfaceProbe.send(node, ClusterInterface.RequestVoteResponse(Term(0), voteGranted = false, node3, node1))
+    clusterInterfaceProbe.send(
+      node, ClusterInterface.RequestVoteResponse(Term(0), voteGranted = false, node3, node1))
 
     // The candidate should resend RequestVote for node2
     clusterInterfaceProbe.expectMsgPF((rpcResendTimeout.timeout * 2 + timingEpsilon).milliseconds) {
