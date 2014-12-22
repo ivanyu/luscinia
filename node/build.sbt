@@ -31,5 +31,6 @@ libraryDependencies ++= Seq(
 scalacOptions ++= Seq(
   "-feature",
   "-deprecation",
+  "-Xfatal-warnings",
   "-encoding", "UTF-8"
 )
