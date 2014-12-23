@@ -90,6 +90,8 @@ class NodeActor(val thisNode: Node,
                 val rpcResendTimeout: RPCResendTimeout)
     extends FSM[NodeActor.FSMState, NodeActor.FSMData] with ActorLogging {
 
+  // TODO Actually send necessary information to monitoring
+
   import me.ivanyu.luscinia.ClusterInterface._
   import me.ivanyu.luscinia.NodeActor._
 
@@ -128,8 +130,12 @@ class NodeActor(val thisNode: Node,
 
   startWith(Follower, FollowerData(currentTerm = Term.start, opLog = Vector[LogEntry](), votedFor = None))
 
+  // Behavior shared by all node states
   val commonBehavior: PartialFunction[Event, State] = {
-    case Event(AppendEntries(term, prevLogIndex, prevLogTerm, entries, leaderCommit, rpcSender, _), FSMData(currentTerm, opLog)) =>
+    // AppendEntries RPC
+    case Event(
+        AppendEntries(term, prevLogIndex, prevLogTerm, entries, leaderCommit, rpcSender, _),
+        FSMData(currentTerm, opLog)) =>
       if (term < currentTerm) {
         clusterInterface ! AppendEntriesResponse(currentTerm, success = false, thisNode, rpcSender)
         stay()
@@ -140,7 +146,8 @@ class NodeActor(val thisNode: Node,
         // We'll accept Leader's term later
         val newTerm = term
         val (success, newOpLog) =
-          if (prevLogIndex < opLog.length && opLog(prevLogIndex).term != prevLogTerm) (false, opLog)
+          if (prevLogIndex < opLog.length && opLog(prevLogIndex).term != prevLogTerm)
+            (false, opLog)
           else
             // Throw away (possibly zero) invalid items and append new ones
             (true, opLog.take(prevLogIndex + 1) ++ entries.map(LogEntry(term, _)))
@@ -158,7 +165,10 @@ class NodeActor(val thisNode: Node,
           stay() using newFollowerData
       }
 
-    case Event(RequestVote(term, lastLogIndex, lastLogTerm, rpcSender, _), d @ FSMData(currentTerm, opLog)) =>
+    // RequestVote RPC
+    case Event(
+        RequestVote(term, lastLogIndex, lastLogTerm, rpcSender, _),
+        d @ FSMData(currentTerm, opLog)) =>
       if (term < currentTerm) {
         clusterInterface ! RequestVoteResponse(currentTerm, voteGranted = false, thisNode, rpcSender)
         stay()
@@ -178,10 +188,9 @@ class NodeActor(val thisNode: Node,
             (shouldVoteFor, None)
         }
 
-        val newFollowerData = FollowerData(newTerm, opLog, votedFor = votedFor)
-
         clusterInterface ! RequestVoteResponse(newTerm, voteGranted = shouldVoteFor, thisNode, rpcSender)
 
+        val newFollowerData = FollowerData(newTerm, opLog, votedFor = votedFor)
         if (term > currentTerm && (stateName == Leader || stateName == Candidate))
           goto(Follower) using newFollowerData
         else
